@@ -1,0 +1,87 @@
+pipeline{
+    agent any
+    triggers {
+        pollSCM('* * * * *')
+    }
+    tools {
+        maven 'maven'
+    }
+    
+    stages{
+        stage("Source Control -Git Checkout"){
+            steps{
+                git url: 'https://github.com/raju-ranjan/hello-app.git'
+            }
+        }
+        
+	
+         stage("Compile - Maven") {
+            agent any
+            steps {
+                slackSend channel: 'toronto-group1', color: 'good', message: 'Build Started: on https://github.com/devopstorontogroup1/WebApp.git', teamDomain: 'torontogroup1', tokenCredentialId: 'slackSecretText'                
+                sh 'mvn package'               
+            }
+        }   
+        
+        stage('Binary Upload - Artifactory') {
+            steps {       
+                 rtMavenResolver (
+                    id: 'resolver-artifactory-id',
+                    serverId: 'artifactory',
+                    releaseRepo: 'devopstoronto-release',
+                    snapshotRepo: 'devopstoronto-snapshot'
+                )  
+
+                rtMavenDeployer (
+                    id: 'deployer-artifactory-id',
+                    serverId: 'artifactory',
+                    releaseRepo: 'devopstoronto-release-local',
+                    snapshotRepo: 'devopstoronto-snapshot-local',
+                    threads: 6
+                ) 
+
+                rtMavenRun (
+                    pom: 'pom.xml',
+                    goals: 'clean install',
+                    opts: '-Xms1024m -Xmx4096m',
+                    resolverId: 'resolver-artifactory-id',
+                    deployerId: 'deployer-artifactory-id',
+                )
+            }
+        }
+        
+        stage("Deploy to QA - tomcat"){
+            steps{
+                sh 'mvn clean package'
+                deploy adapters: [tomcat7(credentialsId: 'tomcat', path: '', url: 'http://18.218.122.189:8080/')], contextPath: '/QAWebapp', onFailure: false, war: '**/*.war'
+            }
+        }
+        
+        stage("Functional Test - Quality - Selenium"){
+            steps{
+                sh 'mvn clean package -f functionaltest/pom.xml'
+                publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: false, reportDir: '\\functionaltest\\target\\surefire-reports', reportFiles: 'index.html', reportName: 'HTML Report', reportTitles: ''])
+            }
+        }
+        
+        stage("Performance Test - Quality - Blazemeter"){
+            steps{
+   		blazeMeterTest credentialsId: 'Blazemeter', testId: '7915191.taurus', workspaceId: '480834'     
+            }
+        }
+        
+        stage("Deploy to Prod - tomcat"){
+            steps{
+                sh 'mvn clean package'
+                deploy adapters: [tomcat7(credentialsId: 'tomcat', path: '', url: 'http://3.134.101.93:8080/')], contextPath: '/ProdWebapp', onFailure: false, war: '**/*.war'
+            }
+        }
+        
+        stage("Sanity Test - Quality - Selenium"){
+            steps{
+                sh 'mvn clean package -f Acceptancetest/pom.xml'
+                publishHTML([allowMissing: false, alwaysLinkToLastBuild: false, keepAll: false, reportDir: '\\Acceptancetest\\target\\surefire-reports', reportFiles: 'index.html', reportName: 'HTML Report', reportTitles: ''])               
+            }
+        }
+    }
+}
